@@ -24,14 +24,19 @@ class WebhookController extends Controller
 
         return response()->json(['status' => 'ok']);
     }
+
     public function verify(Request $request)
     {
         $verifyToken = env('WHATSAPP_VERIFY_TOKEN');
 
-        if ($request->hub_verify_token === $verifyToken) {
-            return response($request->hub_challenge, 200);
+        $mode = $request->input('hub.mode');
+        $token = $request->input('hub.verify_token');
+        $challenge = $request->input('hub.challenge');
+
+        if ($mode === 'subscribe' && $token === $verifyToken) {
+            return response($challenge, 200);
         }
 
-        return response('Invalid token', 403);
+        return response('Forbidden', 403);
     }
 }
