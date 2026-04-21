@@ -29,6 +29,8 @@ class ProcessIncomingMessage implements ShouldQueue
 
     public function handle(AIService $ai, AvailabilityService $availability)
     {
+        Log::info('JOB START', [$this->phone, $this->message]);
+
         $data = $ai->parse($this->message);
 
         if (!$data) {
