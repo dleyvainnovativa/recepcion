@@ -33,6 +33,9 @@ class ProcessIncomingMessage implements ShouldQueue
 
         $data = $ai->parse($this->message);
 
+        Log::info('JOB DATA', [$data]);
+
+
         if (!$data) {
             return $this->reply("No entendí tu mensaje 😅");
         }
