@@ -2,6 +2,7 @@
 
 namespace App\Jobs;
 
+use App\Models\Branch;
 use App\Services\AIService;
 use App\Services\AvailabilityService;
 use App\Models\Service;
@@ -49,19 +50,27 @@ class ProcessIncomingMessage implements ShouldQueue
         switch ($data['intent']) {
 
             case 'greeting':
-                return $this->reply("¡Hola! 😊 ¿Qué servicio deseas agendar?");
+                return $this->reply($data['reply'] ?? "Hola, ¿en qué puedo ayudarte?");
 
             case 'create_appointment':
                 return $this->handleBooking($data, $availability);
 
             case 'cancel_appointment':
-                return $this->reply("Claro 😊 ¿Cuál cita deseas cancelar?");
+                return $this->reply($data['reply'] ?? "Claro, ¿qué cita deseas cancelar?");
 
             case 'reschedule_appointment':
-                return $this->reply("Perfecto 👍 ¿Para qué fecha deseas cambiar tu cita?");
+                return $this->reply($data['reply'] ?? "Perfecto, dime la nueva fecha.");
+            case 'ask_services':
+                return $this->handleServices();
+
+            case 'ask_prices':
+                return $this->handlePrices($data);
+
+            case 'ask_employees':
+                return $this->handleEmployees($data);
 
             default:
-                return $this->reply("¿En qué puedo ayudarte? 😊");
+                return $this->reply($data['reply'] ?? "¿En qué puedo ayudarte?");
         }
     }
 
@@ -135,6 +144,83 @@ class ProcessIncomingMessage implements ShouldQueue
         ]);
 
         return $this->reply("¡Listo! 💖 Tu cita está confirmada.");
+    }
+
+    private function handlePrices($data)
+    {
+        if (empty($data['service'])) {
+            return $this->reply("¿De qué servicio te gustaría conocer el precio?");
+        }
+
+        $service = Service::where('name', 'like', "%{$data['service']}%")->first();
+
+        if (!$service) {
+            return $this->reply("No encontré ese servicio.");
+        }
+
+        $text = "El servicio {$service->name} tiene un costo de {$service->price}.";
+
+        if (!empty($service->duration_minutes)) {
+            $text .= " Duración aproximada: {$service->duration_minutes} minutos.";
+        }
+
+        return $this->reply($text);
+    }
+
+    private function handleEmployees($data)
+    {
+        $query = Employee::query();
+
+        // Filter by branch if provided
+        if (!empty($data['branch'])) {
+            $branch = Branch::where('name', 'like', "%{$data['branch']}%")->first();
+
+            if ($branch) {
+                $query->where('branch_id', $branch->id);
+            }
+        }
+
+        $employees = $query->get();
+
+        if ($employees->isEmpty()) {
+            return $this->reply("No tengo empleados disponibles en este momento.");
+        }
+
+        $text = "Estos son nuestros especialistas:\n";
+
+        foreach ($employees as $employee) {
+            $text .= "- {$employee->name}\n";
+        }
+
+        return $this->reply($text);
+    }
+
+    private function handleServices($data = null)
+    {
+        $query = Service::query();
+
+        // If user mentioned branch
+        if (!empty($data['branch'])) {
+            $branch = Branch::where('name', 'like', "%{$data['branch']}%")->first();
+
+            if ($branch) {
+                $query->where('branch_id', $branch->id);
+            }
+        }
+
+        $services = $query->get();
+
+        if ($services->isEmpty()) {
+            return $this->reply("No tengo servicios disponibles en este momento.");
+        }
+
+        $text = "Estos son los servicios disponibles:\n";
+
+        foreach ($services as $service) {
+            $text .= "- {$service->name} ({$service->duration_minutes} min)\n";
+        }
+
+        return $this->reply($text);
     }
 
 
