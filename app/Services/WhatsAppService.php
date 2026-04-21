@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class WhatsAppService
 {
@@ -12,8 +13,9 @@ class WhatsAppService
         $token = config('services.whatsapp.token');
 
         $url = "https://graph.facebook.com/v18.0/{$phoneId}/messages";
+        Log::info('Reply Whatsapp Message', [$message, $to]);
 
-        return Http::withToken($token)->post($url, [
+        $send =  Http::withToken($token)->post($url, [
             'messaging_product' => 'whatsapp',
             'to' => $to,
             'type' => 'text',
@@ -21,5 +23,7 @@ class WhatsAppService
                 'body' => $message
             ]
         ]);
+        Log::info('Reply Whatsapp Response', [$send]);
+        return $send;
     }
 }

@@ -18,6 +18,14 @@ class AIService
                     'content' => '
 You are an assistant for a beauty clinic.
 
+Detect the user intent.
+
+Possible intents:
+- greeting
+- create_appointment
+- cancel_appointment
+- reschedule_appointment
+
 Extract:
 - intent
 - service
@@ -25,9 +33,16 @@ Extract:
 - employee
 - name
 
-Return ONLY JSON.
-If missing data, return null.
-'
+If the message is a greeting like "hola", "hi", return:
+{
+  "intent": "greeting",
+  "service": null,
+  "datetime": null,
+  "employee": null,
+  "name": null
+}
+
+Return ONLY JSON.'
                 ],
                 [
                     'role' => 'user',

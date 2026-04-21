@@ -31,6 +31,12 @@ class ProcessIncomingMessage implements ShouldQueue
     {
         Log::info('JOB START', [$this->phone, $this->message]);
 
+        $message = strtolower(trim($this->message));
+
+        if (in_array($message, ['hola', 'hi', 'hello'])) {
+            return $this->reply("¡Hola! 😊 ¿Qué servicio deseas agendar?");
+        }
+
         $data = $ai->parse($this->message);
 
         Log::info('JOB DATA', [$data]);
@@ -41,6 +47,9 @@ class ProcessIncomingMessage implements ShouldQueue
         }
 
         switch ($data['intent']) {
+
+            case 'greeting':
+                return $this->reply("¡Hola! 😊 ¿Qué servicio deseas agendar?");
 
             case 'create_appointment':
                 return $this->handleBooking($data, $availability);
@@ -131,6 +140,8 @@ class ProcessIncomingMessage implements ShouldQueue
 
     private function reply($message)
     {
+        Log::info('Reply Message', [$message]);
+
         app(WhatsAppService::class)->sendMessage($this->phone, $message);
     }
 }
