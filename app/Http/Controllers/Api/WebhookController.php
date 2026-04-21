@@ -18,6 +18,8 @@ class WebhookController extends Controller
         $message = $request->input('entry.0.changes.0.value.messages.0.text.body');
         $phone = $request->input('entry.0.changes.0.value.messages.0.from');
 
+        Log::info('WhatsApp Webhook Payload:', [$message, $phone]);
+
         if ($message && $phone) {
             ProcessIncomingMessage::dispatch($phone, $message);
         }
@@ -29,9 +31,11 @@ class WebhookController extends Controller
     {
         $verifyToken = env('WHATSAPP_VERIFY_TOKEN');
 
-        $mode = $request->input('hub.mode');
-        $token = $request->input('hub.verify_token');
-        $challenge = $request->input('hub.challenge');
+        $mode = $request->input('hub_mode');
+        $token = $request->input('hub_verify_token');
+        $challenge = $request->input('hub_challenge');
+
+        Log::info('WhatsApp Verify:', [$mode, $token, $challenge, $verifyToken]);
 
         if ($mode === 'subscribe' && $token === $verifyToken) {
             return response($challenge, 200);
