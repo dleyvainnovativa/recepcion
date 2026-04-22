@@ -88,16 +88,16 @@ class ProcessIncomingMessage implements ShouldQueue
     {
         // Validate required data
         if (!$data['service']) {
-            return $this->reply($data["reply"] ?? "¿Qué servicio deseas?");
+            return $this->reply("¿Qué servicio deseas?");
         }
         if (!$data['branch']) {
-            return $this->reply($data["reply"] ?? "¿Para qué sucursal deseas?");
+            return $this->reply("¿Para qué sucursal deseas?");
         }
         if (!$data['name']) {
-            return $this->reply($data["reply"] ?? "¿Me pudieras dar tu nombre?");
+            return $this->reply("¿Me pudieras dar tu nombre?");
         }
         if (!$data['datetime']) {
-            return $this->reply($data["reply"] ?? "¿Para qué día y hora?");
+            return $this->reply("¿Para qué día y hora?");
         }
 
         // Find service (basic match)
