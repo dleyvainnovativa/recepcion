@@ -42,7 +42,7 @@ class ProcessIncomingMessage implements ShouldQueue
         $data = $ai->parse($this->message);
         $merged = $conversationService->merge($conversation, $data);
 
-        Log::info('AI Parse', [$data]);
+        Log::info('AI Parse', [$data, $merged]);
 
         if (!$data) {
             return $this->reply("No entendí tu mensaje 😅");
