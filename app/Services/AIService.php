@@ -93,7 +93,7 @@ RETURN FORMAT (STRICT JSON ONLY):
                 ]
             ],
         ]);
-        Log::info('AI Response', [json_encode($response)]);
+        // Log::info('AI Response', [json_encode($response)]);
 
         $content = $response->choices[0]->message->content;
 
