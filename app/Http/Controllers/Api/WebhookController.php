@@ -16,7 +16,7 @@ class WebhookController extends Controller
 
         if ($message && $phone) {
             Log::info('WhatsApp Message:', [$message, $phone]);
-            // ProcessIncomingMessage::dispatch($phone, $message);
+            ProcessIncomingMessage::dispatch($phone, $message);
         }
 
         return response()->json(['status' => 'ok']);
