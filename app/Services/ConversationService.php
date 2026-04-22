@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Conversation;
+use Illuminate\Support\Facades\Log;
 
 class ConversationService
 {
@@ -23,6 +24,8 @@ class ConversationService
      */
     public function getHistory(Conversation $conversation): array
     {
+        Log::info('Conversation Context:', [$conversation->context]);
+
         $context = json_decode($conversation->context, true);
         return $context['history'] ?? [];
     }
