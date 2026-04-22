@@ -35,6 +35,8 @@ class ProcessIncomingMessage implements ShouldQueue
     ): void {
         // ── 1. Load or create the conversation ──────────────────────────────
         $conversation = $conversationService->get($this->phone);
+        Log::info('Conversation:', [$conversation]);
+
         $history      = $conversationService->getHistory($conversation);
 
         // ── 2. Load live business data once (branches, services, employees) ─
