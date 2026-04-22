@@ -37,10 +37,12 @@ class ProcessIncomingMessage implements ShouldQueue
         $conversation = $conversationService->get($this->phone);
         Log::info('Conversation:', [$conversation]);
 
-        $history      = $conversationService->getHistory($conversation);
+        $history = $conversationService->getHistory($conversation);
 
+        Log::info('History Conversation:', [$history]);
         // ── 2. Load live business data once (branches, services, employees) ─
         $businessData = $this->loadBusinessData();
+        Log::info('Business Data:', [$businessData]);
 
         // ── 3. Ask the AI to parse intent + extract entities ────────────────
         $data = $ai->parse($this->message, $history, $businessData);

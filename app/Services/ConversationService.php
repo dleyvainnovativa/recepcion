@@ -24,7 +24,6 @@ class ConversationService
      */
     public function getHistory(Conversation $conversation): array
     {
-        Log::info('Conversation Context:', [$conversation->context]);
         $context = $conversation->context;
         return $context['history'] ?? [];
     }
