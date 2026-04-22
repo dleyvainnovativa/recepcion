@@ -2,124 +2,138 @@
 
 namespace App\Services;
 
-use Carbon\Carbon;
-use App\Models\Service;
-use App\Models\Employee;
 use App\Models\Appointment;
 use App\Models\EmployeeSchedule;
 use App\Models\EmployeeTimeOff;
+use Carbon\Carbon;
+use Illuminate\Support\Collection;
 
 class AvailabilityService
 {
-    public function check($branchId, $serviceId, $datetime, $employeeId = null)
-    {
-        $service = Service::findOrFail($serviceId);
-
-        $start = Carbon::parse($datetime);
-        $end = $start->copy()->addMinutes($service->duration_minutes);
+    /**
+     * Check whether a specific slot is free for a given branch/service/employee.
+     *
+     * @param  int          $branchId
+     * @param  int          $serviceId
+     * @param  int|null     $employeeId   If null, checks any employee in the branch.
+     * @param  Carbon       $start
+     * @param  Carbon       $end
+     * @return bool
+     */
+    public function isSlotFree(
+        int     $branchId,
+        int     $serviceId,
+        ?int    $employeeId,
+        Carbon  $start,
+        Carbon  $end,
+    ): bool {
+        $query = Appointment::where('branch_id', $branchId)
+            ->where('status', 'scheduled')
+            ->where(function ($q) use ($start, $end) {
+                // Overlap condition: existing appointment overlaps with [start, end)
+                $q->where('start_time', '<', $end)
+                    ->where('end_time',   '>',  $start);
+            });
 
         if ($employeeId) {
-            $employee = Employee::findOrFail($employeeId);
-            return $this->isEmployeeAvailable($employee, $start, $end);
+            $query->where('employee_id', $employeeId);
         }
 
-        $employees = Employee::where('branch_id', $branchId)
-            ->where('active', true)
-            ->get();
-
-        foreach ($employees as $employee) {
-            if ($this->isEmployeeAvailable($employee, $start, $end)) {
-                return [
-                    'available' => true,
-                    'employee_id' => $employee->id
-                ];
-            }
+        if ($query->exists()) {
+            return false; // Slot is taken
         }
 
-        return ['available' => false];
-    }
-
-    private function isEmployeeAvailable($employee, $start, $end)
-    {
-        $dayOfWeek = $start->dayOfWeek;
-
-        $schedule = EmployeeSchedule::where('employee_id', $employee->id)
-            ->where('day_of_week', $dayOfWeek)
-            ->where('is_working_day', true)
-            ->first();
-
-        if (!$schedule) return false;
-
-        if (
-            $start->format('H:i:s') < $schedule->start_time ||
-            $end->format('H:i:s') > $schedule->end_time
-        ) {
-            return false;
-        }
-
-        if ($schedule->break_start && $schedule->break_end) {
-            if (
-                $start->format('H:i:s') < $schedule->break_end &&
-                $end->format('H:i:s') > $schedule->break_start
-            ) {
+        // If employee given, also verify they work that day and aren't on time-off
+        if ($employeeId) {
+            if (!$this->employeeWorksAt($employeeId, $start)) {
                 return false;
             }
         }
 
-        $isOff = EmployeeTimeOff::where('employee_id', $employee->id)
-            ->whereDate('start_date', '<=', $start->toDateString())
-            ->whereDate('end_date', '>=', $start->toDateString())
-            ->exists();
-
-        if ($isOff) return false;
-
-        $overlap = Appointment::where('employee_id', $employee->id)
-            ->where('status', 'scheduled')
-            ->where(function ($query) use ($start, $end) {
-                $query->whereBetween('start_time', [$start, $end])
-                    ->orWhereBetween('end_time', [$start, $end])
-                    ->orWhere(function ($q) use ($start, $end) {
-                        $q->where('start_time', '<=', $start)
-                            ->where('end_time', '>=', $end);
-                    });
-            })
-            ->exists();
-
-        if ($overlap) return false;
-
         return true;
     }
-    public function getAvailableSlots($branchId, $serviceId, $date, $employeeId = null)
-    {
-        $service = Service::findOrFail($serviceId);
 
-        $date = Carbon::parse($date);
+    /**
+     * Suggest up to $count available slots near a requested time.
+     *
+     * Strategy: scan the next 7 days in 30-minute increments and collect free slots.
+     *
+     * @return Collection<Carbon>
+     */
+    public function suggestNearbySlots(
+        int     $branchId,
+        int     $serviceId,
+        Carbon  $around,
+        int     $count      = 3,
+        ?int    $employeeId = null,
+    ): Collection {
+        $service  = \App\Models\Service::find($serviceId);
+        $duration = $service?->duration_minutes ?? 60;
 
-        // Define working window (you can improve later per employee)
-        $startOfDay = $date->copy()->setTime(9, 0);
-        $endOfDay = $date->copy()->setTime(18, 0);
+        $suggestions = collect();
+        $candidate   = $around->copy()->roundMinutes(30);
 
-        $slots = [];
+        // Search forward up to 7 days
+        $limit = $around->copy()->addDays(7);
 
-        $current = $startOfDay->copy();
+        while ($candidate->lessThan($limit) && $suggestions->count() < $count) {
+            $candidateEnd = $candidate->copy()->addMinutes($duration);
 
-        while ($current < $endOfDay) {
-
-            $result = $this->check(
-                $branchId,
-                $serviceId,
-                $current->toDateTimeString(),
-                $employeeId
-            );
-
-            if (is_array($result) && $result['available']) {
-                $slots[] = $current->format('H:i');
+            if (
+                $candidate->isAfter(now()) &&
+                $candidate->hour >= 8 &&
+                $candidateEnd->hour <= 21 &&
+                $this->isSlotFree($branchId, $serviceId, $employeeId, $candidate, $candidateEnd)
+            ) {
+                $suggestions->push($candidate->copy());
             }
 
-            // Move in 30 min steps
-            $current->addMinutes(30);
+            $candidate->addMinutes(30);
         }
 
-        return $slots;
+        return $suggestions;
+    }
+
+    /**
+     * Verify that an employee is scheduled to work at the given datetime
+     * and is not on approved time-off.
+     */
+    private function employeeWorksAt(int $employeeId, Carbon $datetime): bool
+    {
+        // day_of_week: 0 = Sunday … 6 = Saturday (matches Carbon->dayOfWeek)
+        $schedule = EmployeeSchedule::where('employee_id', $employeeId)
+            ->where('day_of_week', $datetime->dayOfWeek)
+            ->where('is_working_day', 1)
+            ->first();
+
+        if (!$schedule) {
+            return false;
+        }
+
+        // Check shift hours
+        $shiftStart = Carbon::createFromTimeString($schedule->start_time);
+        $shiftEnd   = Carbon::createFromTimeString($schedule->end_time);
+        $apptTime   = Carbon::createFromTimeString($datetime->format('H:i'));
+
+        if ($apptTime->lessThan($shiftStart) || $apptTime->greaterThanOrEqualTo($shiftEnd)) {
+            return false;
+        }
+
+        // Check break
+        if ($schedule->break_start && $schedule->break_end) {
+            $breakStart = Carbon::createFromTimeString($schedule->break_start);
+            $breakEnd   = Carbon::createFromTimeString($schedule->break_end);
+            if ($apptTime->between($breakStart, $breakEnd)) {
+                return false;
+            }
+        }
+
+        // Check time-off
+        $onTimeOff = EmployeeTimeOff::where('employee_id', $employeeId)
+            ->where('start_date', '<=', $datetime->toDateString())
+            ->where('end_date',   '>=', $datetime->toDateString())
+            ->exists();
+
+        return !$onTimeOff;
     }
 }

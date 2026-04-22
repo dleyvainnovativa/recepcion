@@ -4,295 +4,309 @@ namespace App\Jobs;
 
 use App\Models\Appointment;
 use App\Models\Branch;
+use App\Models\Employee;
+use App\Models\Service;
 use App\Services\AIService;
 use App\Services\AvailabilityService;
-use App\Models\Service;
-use App\Models\Employee;
 use App\Services\ConversationService;
-use Illuminate\Support\Facades\Log;
+use App\Services\WhatsAppService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
-use Illuminate\Foundation\Bus\Dispatchable; // 👈 IMPORTANT
+use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
-use App\Services\WhatsAppService;
+use Illuminate\Support\Facades\Log;
 
 class ProcessIncomingMessage implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public $phone;
-    public $message;
+    public int $tries = 3;
 
-    public function __construct($phone, $message)
-    {
-        $this->phone = $phone;
-        $this->message = $message;
-    }
+    public function __construct(
+        public readonly string $phone,
+        public readonly string $message,
+    ) {}
 
-    public function handle(AIService $ai, AvailabilityService $availability, ConversationService $conversationService)
-    {
-
-        $message = strtolower(trim($this->message));
-
-        if (in_array($message, ['hola', 'hi', 'hello'])) {
-            return $this->reply("¡Hola! ¿Qué servicio deseas agendar?");
-        }
+    public function handle(
+        AIService           $ai,
+        AvailabilityService $availability,
+        ConversationService $conversationService,
+    ): void {
+        // ── 1. Load or create the conversation ──────────────────────────────
         $conversation = $conversationService->get($this->phone);
-        $data = $ai->parse($this->message);
-        $merged = $conversationService->merge($conversation, $data);
+        $history      = $conversationService->getHistory($conversation);
 
-        Log::info('AI Parse', [$data, $merged]);
+        // ── 2. Load live business data once (branches, services, employees) ─
+        $businessData = $this->loadBusinessData();
+
+        // ── 3. Ask the AI to parse intent + extract entities ────────────────
+        $data = $ai->parse($this->message, $history, $businessData);
 
         if (!$data) {
-            return $this->reply("No entendí tu mensaje 😅");
+            $this->reply("Lo siento, tuve un problema al procesar tu mensaje. ¿Puedes intentarlo de nuevo?");
+            return;
         }
 
-        // If we already have enough data, continue booking regardless of intent
-        if (
-            in_array($data['intent'], ['create_appointment']) &&
-            !empty($merged['service']) &&
-            !empty($merged['datetime']) &&
-            !empty($merged['name'])
-        ) {
-            return $this->handleBooking($merged, $availability, $conversationService, $conversation);
-        }
-
-        switch ($data['intent']) {
-
-            case 'greeting':
-                return $this->reply($data['reply'] ?? "Hola, ¿en qué puedo ayudarte?");
-
-            case 'create_appointment':
-                return $this->handleBooking($merged, $availability, $conversationService, $conversation);
-
-            case 'check_availability':
-                return $this->handleAvailability($merged, $availability);
-
-            case 'cancel_appointment':
-                return $this->reply($data['reply'] ?? "Claro, ¿qué cita deseas cancelar?");
-
-            case 'reschedule_appointment':
-                return $this->reply($data['reply'] ?? "Perfecto, dime la nueva fecha.");
-            case 'ask_services':
-                return $this->handleServices();
-
-            case 'ask_prices':
-                return $this->handlePrices($merged);
-
-            case 'ask_employees':
-                return $this->handleEmployees($merged);
-
-            default:
-                return $this->reply($data['reply'] ?? "¿En qué puedo ayudarte?");
-        }
-    }
-
-    private function handleAvailability($data, $availability)
-    {
-        if (!$data['service']) {
-            return $this->reply("¿Para qué servicio deseas consultar disponibilidad?");
-        }
-
-        if (!$data['datetime']) {
-            return $this->reply("¿Para qué día deseas consultar?");
-        }
-
-        $service = Service::where('name', 'like', "%{$data['service']}%")->first();
-
-        if (!$service) {
-            return $this->reply("No encontré ese servicio.");
-        }
-
-        $slots = $availability->getAvailableSlots(
-            $service->branch_id,
-            $service->id,
-            $data['datetime']
-        );
-
-        if (empty($slots)) {
-            return $this->reply("No tengo horarios disponibles ese día.");
-        }
-
-        $text = "Estos son los horarios disponibles:\n";
-
-        foreach (array_slice($slots, 0, 5) as $slot) {
-            $text .= "- $slot\n";
-        }
-
-        return $this->reply($text);
-    }
-
-    private function handleBooking($data, $availability, $conversationService, $conversation)
-    {
-        // Validate required data
-        if (!$data['service']) {
-            return $this->reply("¿Qué servicio deseas?");
-        }
-        if (!$data['branch']) {
-            return $this->reply("¿Para qué sucursal deseas?");
-        }
-        if (!$data['name']) {
-            return $this->reply("¿Me pudieras dar tu nombre?");
-        }
-        if (!$data['datetime']) {
-            return $this->reply("¿Para qué día y hora?");
-        }
-
-        $parsedDate = null;
-
-        try {
-            $parsedDate = \Carbon\Carbon::parse($data['datetime']);
-        } catch (\Exception $e) {
-            return $this->reply("No pude entender la fecha y hora, ¿podrías especificarla?");
-        }
-
-        // Find service (basic match)
-        $service = Service::where('name', 'like', "%{$data['service']}%")->first();
-
-        if (!$service) {
-            return $this->reply("No encontré ese servicio 😅");
-        }
-
-        // Find employee (optional)
-        $employeeId = null;
-
-        if (!empty($data['employee'])) {
-            $employee = Employee::where('name', 'like', "%{$data['employee']}%")->first();
-            if ($employee) {
-                $employeeId = $employee->id;
-            }
-        }
-
-        // Check availability
-        $result = $availability->check(
-            $service->branch_id,
-            $service->id,
-            $data['datetime'],
-            $employeeId
-        );
-
-        if (!$result['available']) {
-
-            // Suggest slots
-            $slots = $availability->getAvailableSlots(
-                $service->branch_id,
-                $service->id,
-                $data['datetime']
-            );
-
-            if (empty($slots)) {
-                return $this->reply("No tengo horarios disponibles ese día 😢");
-            }
-
-            $text = "No está disponible 😢\nTe ofrezco:\n";
-
-            foreach (array_slice($slots, 0, 5) as $slot) {
-                $text .= "- $slot\n";
-            }
-
-            return $this->reply($text);
-        }
-
-        // Book appointment
-        $appointment = Appointment::create([
-            'client_name' => $data['name'] ?? 'Cliente',
-            'client_phone' => $this->phone,
-            'branch_id' => $service->branch_id,
-            'service_id' => $service->id,
-            'employee_id' => $result['employee_id'] ?? $employeeId,
-            'start_time' => $data['datetime'],
-            'end_time' => now()->parse($data['datetime'])->addMinutes($service->duration_minutes),
+        Log::info('[ProcessIncomingMessage] AI parsed', [
+            'phone'  => $this->phone,
+            'intent' => $data['intent'] ?? 'unknown',
+            'data'   => $data,
         ]);
 
-        $conversationService->clear($conversation);
+        // ── 4. Merge extracted data with any data saved from prior turns ────
+        //      (e.g. service was given two messages ago, now user adds date)
+        $pending = $conversationService->getContextData($conversation, 'pending', []);
+        $merged  = array_merge($pending, array_filter($data, fn($v) => $v !== null));
 
+        // ── 5. Route by intent ───────────────────────────────────────────────
+        $reply = match ($data['intent'] ?? 'unknown') {
+            'greeting'              => $data['reply'],
+            'create_appointment'    => $this->handleCreateAppointment($merged, $data['reply'], $conversation, $conversationService, $availability),
+            'check_availability'    => $this->handleCheckAvailability($merged, $data['reply'], $availability),
+            'cancel_appointment'    => $this->handleCancelAppointment($merged, $data['reply']),
+            'reschedule_appointment' => $data['reply'], // extend as needed
+            'ask_services'          => $data['reply'], // AI already used real DB data
+            'ask_branches'          => $data['reply'],
+            'ask_prices'            => $data['reply'],
+            'ask_employees'         => $data['reply'],
+            'general_question'      => $data['reply'],
+            default                 => $data['reply'] ?? "¿En qué puedo ayudarte?",
+        };
 
-        return $this->reply("¡Listo! 💖 Tu cita está confirmada.");
+        // ── 6. Persist updated history ───────────────────────────────────────
+        $conversationService->appendHistory($conversation, $this->message, $reply);
+
+        // ── 7. Send reply ────────────────────────────────────────────────────
+        $this->reply($reply);
     }
 
-    private function handlePrices($data)
-    {
-        if (empty($data['service'])) {
-            return $this->reply("¿De qué servicio te gustaría conocer el precio?");
+    // ─────────────────────────────────────────────────────────────────────────
+    // Intent Handlers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Try to create an appointment.
+     * If required data (service, datetime) is missing, save what we have and
+     * return the AI's clarification question instead of attempting to book.
+     */
+    private function handleCreateAppointment(
+        array               $merged,
+        string              $aiReply,
+        $conversation,
+        ConversationService $conversationService,
+        AvailabilityService $availability,
+    ): string {
+        $serviceName  = $merged['service']     ?? null;
+        $datetime     = $merged['datetime']    ?? null;
+        $clientName   = $merged['client_name'] ?? null;
+        $branchName   = $merged['branch']      ?? null;
+        $employeeName = $merged['employee']    ?? null;
+
+        // ── Missing required fields → save progress, let AI ask ─────────────
+        if (!$serviceName || !$datetime) {
+            $conversationService->setContextData($conversation, array_filter([
+                'service'     => $serviceName,
+                'datetime'    => $datetime,
+                'client_name' => $clientName,
+                'branch'      => $branchName,
+                'employee'    => $employeeName,
+            ]));
+            return $aiReply; // AI already asked the clarifying question
         }
 
-        $service = Service::where('name', 'like', "%{$data['service']}%")->first();
-
+        // ── Resolve service from DB ──────────────────────────────────────────
+        $service = Service::where('name', 'like', "%{$serviceName}%")->first();
         if (!$service) {
-            return $this->reply("No encontré ese servicio.");
+            return "No encontré el servicio \"{$serviceName}\". ¿Puedes confirmar el nombre?";
         }
 
-        $text = "El servicio {$service->name} tiene un costo de {$service->price}.";
+        // ── Resolve branch (use service's branch as fallback) ────────────────
+        $branch = $branchName
+            ? Branch::where('name', 'like', "%{$branchName}%")->first()
+            : Branch::find($service->branch_id);
 
-        if (!empty($service->duration_minutes)) {
-            $text .= " Duración aproximada: {$service->duration_minutes} minutos.";
+        if (!$branch) {
+            return "No encontré la sucursal indicada. ¿Puedes especificarla?";
         }
 
-        return $this->reply($text);
-    }
+        // ── Resolve employee (optional) ──────────────────────────────────────
+        $employee = null;
+        if ($employeeName) {
+            $employee = Employee::where('branch_id', $branch->id)
+                ->where('name', 'like', "%{$employeeName}%")
+                ->where('active', 1)
+                ->first();
+        }
 
-    private function handleEmployees($data)
-    {
-        $query = Employee::query();
+        // ── Parse datetime ───────────────────────────────────────────────────
+        $startTime = \Carbon\Carbon::createFromFormat('Y-m-d H:i', $datetime);
+        $endTime   = $startTime->copy()->addMinutes($service->duration_minutes);
 
-        // Filter by branch if provided
-        if (!empty($data['branch'])) {
-            $branch = Branch::where('name', 'like', "%{$data['branch']}%")->first();
+        // ── Check availability ───────────────────────────────────────────────
+        $isAvailable = $availability->isSlotFree(
+            branchId: $branch->id,
+            serviceId: $service->id,
+            employeeId: $employee?->id,
+            start: $startTime,
+            end: $endTime,
+        );
 
-            if ($branch) {
-                $query->where('branch_id', $branch->id);
+        if (!$isAvailable) {
+            $suggestions = $availability->suggestNearbySlots(
+                branchId: $branch->id,
+                serviceId: $service->id,
+                employeeId: $employee?->id,
+                around: $startTime,
+                count: 3,
+            );
+
+            if ($suggestions->isEmpty()) {
+                return "Lo siento, ese horario no está disponible y no encontré opciones cercanas. ¿Deseas intentar otro día?";
             }
+
+            $options = $suggestions->map(fn($s) => $s->format('d/m/Y \a \l\a\s H:i'))->join(', ');
+            return "Ese horario no está disponible. Tenemos espacio en: {$options}. ¿Cuál prefieres?";
         }
 
-        $employees = $query->get();
+        // ── Create the appointment ───────────────────────────────────────────
+        $appointment = Appointment::create([
+            'client_name'  => $clientName ?? 'Cliente WhatsApp',
+            'client_phone' => $this->phone,
+            'branch_id'    => $branch->id,
+            'service_id'   => $service->id,
+            'employee_id'  => $employee?->id,
+            'start_time'   => $startTime,
+            'end_time'     => $endTime,
+            'status'       => 'scheduled',
+        ]);
 
-        if ($employees->isEmpty()) {
-            return $this->reply("No tengo empleados disponibles en este momento.");
-        }
+        // ── Clear pending data now that the booking is done ──────────────────
+        $conversationService->setContextData($conversation, []);
 
-        $text = "Estos son nuestros especialistas:\n";
+        $employeeText = $employee ? " con {$employee->name}" : '';
+        $dateText     = $startTime->translatedFormat('l d \d\e F \a \l\a\s H:i');
 
-        foreach ($employees as $employee) {
-            $text .= "- {$employee->name}\n";
-        }
-
-        return $this->reply($text);
+        return "Cita confirmada para {$service->name}{$employeeText} el {$dateText} en {$branch->name}. "
+            . "Tu número de cita es #{$appointment->id}. ¡Te esperamos!";
     }
 
-    private function handleServices($data = null)
-    {
-        $query = Service::query();
+    /**
+     * Check availability for a given service/date without booking.
+     */
+    private function handleCheckAvailability(
+        array               $merged,
+        string              $aiReply,
+        AvailabilityService $availability,
+    ): string {
+        $serviceName = $merged['service']  ?? null;
+        $datetime    = $merged['datetime'] ?? null;
 
-        // If user mentioned branch
-        if (!empty($data['branch'])) {
-            $branch = Branch::where('name', 'like', "%{$data['branch']}%")->first();
-
-            if ($branch) {
-                $query->where('branch_id', $branch->id);
-            }
+        if (!$serviceName || !$datetime) {
+            return $aiReply; // AI will ask for missing info
         }
 
-        $services = $query->get();
-
-        if ($services->isEmpty()) {
-            return $this->reply("No tengo servicios disponibles en este momento.");
+        $service = Service::where('name', 'like', "%{$serviceName}%")->first();
+        if (!$service) {
+            return "No encontré el servicio \"{$serviceName}\". ¿Puedes confirmar el nombre?";
         }
 
-        $text = "Estos son los servicios disponibles:\n";
+        $start = \Carbon\Carbon::createFromFormat('Y-m-d H:i', $datetime);
+        $end   = $start->copy()->addMinutes($service->duration_minutes);
 
-        foreach ($services as $service) {
-            $text .= "- {$service->name} ({$service->duration_minutes} min)\n";
+        $slots = $availability->suggestNearbySlots(
+            branchId: $service->branch_id,
+            serviceId: $service->id,
+            around: $start,
+            count: 5,
+        );
+
+        if ($slots->isEmpty()) {
+            return "No encontré horarios disponibles para {$service->name} en esa fecha. ¿Quieres intentar otro día?";
         }
 
-        return $this->reply($text);
+        $options = $slots->map(fn($s) => $s->format('d/m/Y H:i'))->join(', ');
+        return "Horarios disponibles para {$service->name}: {$options}. ¿Cuál te acomoda?";
     }
 
-
-    private function reply($message)
+    /**
+     * Cancel an appointment by ID or by looking up the client's phone.
+     */
+    private function handleCancelAppointment(array $merged, string $aiReply): string
     {
-        Log::info('Reply Message', [$message]);
+        // Try to find upcoming appointment by phone number
+        $appointment = Appointment::where('client_phone', $this->phone)
+            ->where('status', 'scheduled')
+            ->where('start_time', '>', now())
+            ->orderBy('start_time')
+            ->first();
+
+        if (!$appointment) {
+            return "No encontré citas activas registradas con este número. "
+                . "Si crees que es un error, contáctanos directamente.";
+        }
+
+        // If multiple appointments exist you may want to list them; for now cancel the soonest
+        $appointment->update(['status' => 'cancelled']);
+
+        $dateText = $appointment->start_time->translatedFormat('l d \d\e F \a \l\a\s H:i');
+        return "Tu cita #{$appointment->id} del {$dateText} ha sido cancelada. "
+            . "Si deseas reagendar, con gusto te ayudo.";
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Helpers
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Load all relevant business data from the DB in one place.
+     * This is passed to the AI so it can answer questions about services/prices/employees
+     * using real information instead of hallucinating.
+     */
+    private function loadBusinessData(): array
+    {
+        $branches = Branch::all()->map(fn($b) => [
+            'name'    => $b->name,
+            'address' => $b->address,
+            'phone'   => $b->phone,
+        ])->toArray();
+
+        $services = Service::with('branch')->get()->map(fn($s) => [
+            'name'             => $s->name,
+            'duration_minutes' => $s->duration_minutes,
+            'price'            => number_format($s->price, 2),
+            'branch'           => $s->branch->name ?? 'N/A',
+        ])->toArray();
+
+        $employees = Employee::with('branch')->where('active', 1)->get()->map(fn($e) => [
+            'name'   => $e->name,
+            'branch' => $e->branch->name ?? 'N/A',
+        ])->toArray();
+
+        return compact('branches', 'services', 'employees');
+    }
+
+    private function reply(string $message): void
+    {
+        Log::info('[ProcessIncomingMessage] Sending reply', [
+            'phone'   => $this->phone,
+            'message' => $message,
+        ]);
 
         app(WhatsAppService::class)->sendMessage($this->phone, $message);
+    }
+
+    public function failed(\Throwable $exception): void
+    {
+        Log::error('[ProcessIncomingMessage] Job failed', [
+            'phone' => $this->phone,
+            'error' => $exception->getMessage(),
+        ]);
+
+        // Optionally notify the user
+        app(WhatsAppService::class)->sendMessage(
+            $this->phone,
+            "Tuve un problema al procesar tu solicitud. Por favor intenta de nuevo en un momento."
+        );
     }
 }

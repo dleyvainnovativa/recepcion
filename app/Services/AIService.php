@@ -7,110 +7,85 @@ use OpenAI;
 
 class AIService
 {
-    public function parse($message)
+    /**
+     * Parse an incoming message using OpenAI, injecting conversation history
+     * so the model has memory of the full exchange.
+     *
+     * @param  string  $message        The raw user message.
+     * @param  array   $history        Prior messages [['role'=>'user','content'=>'...'], ...].
+     * @param  array   $businessData   Live data from DB (services, employees, branches).
+     * @return array|null              Decoded JSON from the model, or null on failure.
+     */
+    public function parse(string $message, array $history = [], array $businessData = []): ?array
     {
         $client = OpenAI::client(config('services.openai.key'));
 
-        Log::info('Client Message', [$message]);
-        $today = now()->format('Y-m-d');
-        $response = $client->chat()->create([
-            'model' => 'gpt-4.1-mini',
-            'messages' => [
-                [
-                    'role' => 'system',
-                    'content' => '
-                    Today is: {$today}
-                    ---
-You are an assistant for a beauty clinic.
+        $today    = now()->format('Y-m-d');
+        $dayName  = now()->translatedFormat('l'); // e.g. "martes" with Spanish locale
+        $time     = now()->format('H:i');
 
-Your job is to:
-1. Understand user messages
-2. Detect intent
-3. Extract useful structured data
-4. Respond naturally like a professional human receptionist (no emojis)
-5. Help the user with information about services, branches, employees, prices, and appointment scheduling
+        // Build a readable summary of business data to inject into the system prompt
+        $businessContext = $this->buildBusinessContext($businessData);
+
+        $systemPrompt = <<<PROMPT
+Hoy es {$today} ({$dayName}), hora actual: {$time}.
+
+Eres la recepcionista virtual de una clínica de belleza. Eres profesional, amable y concisa.
+Respondes siempre en español y NUNCA en inglés.
+No uses emojis.
 
 ---
 
-AVAILABLE INTENTS:
+INFORMACIÓN DEL NEGOCIO (usa esto para responder preguntas):
+{$businessContext}
+
+---
+
+INTENCIONES QUE PUEDES DETECTAR:
 - greeting
 - create_appointment
 - cancel_appointment
 - reschedule_appointment
+- check_availability
 - ask_services
 - ask_branches
 - ask_prices
 - ask_employees
 - general_question
-- check_availability
+- unknown
 
 ---
 
-YOU MUST EXTRACT:
-- intent
-- service (if mentioned)
-- branch (if mentioned)
-- employee (if mentioned)
-- datetime (if mentioned)
-- name (if mentioned)
+DATOS A EXTRAER (cuando aplique):
+- intent        → la intención del mensaje
+- service       → nombre del servicio mencionado (o null)
+- branch        → nombre de la sucursal mencionada (o null)
+- employee      → nombre del empleado mencionado (o null)
+- datetime      → fecha y hora en formato YYYY-MM-DD HH:MM (o null)
+- client_name   → nombre del cliente si lo menciona (o null)
 
 ---
 
-RESPONSE RULES:
-
-- You MUST always include a natural language reply in "reply"
-- Do NOT use emojis
-- Be concise, professional, and helpful
-- If user asks about services, explain available services clearly
-- If user asks about prices, include price if available
-- If user asks about employees, mention who is available or works in that service/branch
-- If user asks general questions, respond normally AND set intent = "general_question"
+REGLAS DE FECHA Y HORA:
+- Usa el año actual basado en la fecha de hoy.
+- Convierte expresiones como "mañana", "hoy", "el lunes" a fechas reales.
+- "en la mañana" → 09:00 | "en la tarde" → 15:00 | "en la noche" → 20:00
+- Si sólo se menciona fecha sin hora, usa 09:00.
+- Si la fecha/hora es ambigua, devuelve null y pide aclaración en "reply".
 
 ---
 
-IMPORTANT BEHAVIOR:
-
-- If user says "what do you offer?" → list services
-- If user says "who can attend me?" → list employees
-- If user says "how much is it?" → ask for service or infer if possible
-- If user is unclear → ask a clarification question in reply
-
----
-
-DATETIME RULES:
-
-- Always use the current year based on todays date
-- Today is {$today}
-- Convert all date/time expressions into format: YYYY-MM-DD HH:MM
-- Always assume the current year if not specified
-- Interpret:
-  - "mañana" as tomorrows date
-  - "hoy" as todays date
-  - "en la mañana" as 09:00
-  - "en la tarde" as 15:00
-  - "en la noche" as 20:00
-- If only a date is provided, set time to 09:00
-- If only time is provided, assume next available day
-- If the datetime is unclear, return null
-
-- Output example:
-  "datetime": "2026-04-22 15:00"
+REGLAS DE COMPORTAMIENTO:
+- NUNCA asumas disponibilidad. El sistema la verifica.
+- Si el usuario quiere agendar, extrae: service, branch, employee (opcional), datetime, client_name.
+  Si falta algún dato obligatorio (service, datetime), pregunta por él en "reply".
+- Si el usuario pregunta por servicios o precios, usa la información del negocio.
+- Si el usuario quiere cancelar o reprogramar, pide su número de cita o teléfono si no lo tienes.
+- Mantén el contexto de la conversación: si ya se mencionó un servicio antes, no lo vuelvas a pedir.
 
 ---
 
-- Always respond in Spanish
-- Never switch to English
-
----
-
-CRITICAL RULE:
-
-- Never assume availability
-- Never say "there is availability"
-- Availability must be determined by the system
-- If user asks for availability, ask for service and date OR say you will check
-
-RETURN FORMAT (STRICT JSON ONLY):
+FORMATO DE RESPUESTA (JSON estricto, sin markdown, sin texto extra):
 
 {
   "intent": "",
@@ -118,21 +93,77 @@ RETURN FORMAT (STRICT JSON ONLY):
   "branch": null,
   "employee": null,
   "datetime": null,
-  "name": null,
+  "client_name": null,
   "reply": ""
 }
-'
-                ],
-                [
-                    'role' => 'user',
-                    'content' => $message
-                ]
-            ],
-        ]);
-        // Log::info('AI Response', [json_encode($response)]);
+PROMPT;
 
-        $content = $response->choices[0]->message->content;
+        // Build the messages array: system + full history + current user message
+        $messages = [['role' => 'system', 'content' => $systemPrompt]];
 
-        return json_decode($content, true);
+        foreach ($history as $entry) {
+            $messages[] = ['role' => $entry['role'], 'content' => $entry['content']];
+        }
+
+        $messages[] = ['role' => 'user', 'content' => $message];
+
+        try {
+            $response = $client->chat()->create([
+                'model'       => 'gpt-4.1-mini',
+                'temperature' => 0.3, // Lower = more predictable JSON output
+                'messages'    => $messages,
+            ]);
+
+            $content = $response->choices[0]->message->content ?? '';
+
+            Log::info('[AIService] Raw response', ['content' => $content]);
+
+            // Strip accidental markdown fences before decoding
+            $clean = preg_replace('/^```json|^```|```$/m', '', trim($content));
+
+            $decoded = json_decode($clean, true);
+
+            if (json_last_error() !== JSON_ERROR_NONE) {
+                Log::error('[AIService] JSON decode failed', ['raw' => $content]);
+                return null;
+            }
+
+            return $decoded;
+        } catch (\Throwable $e) {
+            Log::error('[AIService] API call failed', ['error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
+    /**
+     * Build a human-readable block of business data to embed in the system prompt.
+     * This keeps the AI grounded in real DB data without it hallucinating services/prices.
+     */
+    private function buildBusinessContext(array $businessData): string
+    {
+        $lines = [];
+
+        if (!empty($businessData['branches'])) {
+            $lines[] = "SUCURSALES:";
+            foreach ($businessData['branches'] as $b) {
+                $lines[] = "  - {$b['name']}" . ($b['address'] ? " | {$b['address']}" : '') . ($b['phone'] ? " | Tel: {$b['phone']}" : '');
+            }
+        }
+
+        if (!empty($businessData['services'])) {
+            $lines[] = "\nSERVICIOS Y PRECIOS:";
+            foreach ($businessData['services'] as $s) {
+                $lines[] = "  - {$s['name']} | Duración: {$s['duration_minutes']} min | Precio: \${$s['price']} | Sucursal: {$s['branch']}";
+            }
+        }
+
+        if (!empty($businessData['employees'])) {
+            $lines[] = "\nEMPLEADOS ACTIVOS:";
+            foreach ($businessData['employees'] as $e) {
+                $lines[] = "  - {$e['name']} | Sucursal: {$e['branch']}";
+            }
+        }
+
+        return $lines ? implode("\n", $lines) : "No hay información de negocio disponible.";
     }
 }
