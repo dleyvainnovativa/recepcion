@@ -2,11 +2,13 @@
 
 namespace App\Jobs;
 
+use App\Models\Appointment;
 use App\Models\Branch;
 use App\Services\AIService;
 use App\Services\AvailabilityService;
 use App\Models\Service;
 use App\Models\Employee;
+use App\Services\ConversationService;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
@@ -28,7 +30,7 @@ class ProcessIncomingMessage implements ShouldQueue
         $this->message = $message;
     }
 
-    public function handle(AIService $ai, AvailabilityService $availability)
+    public function handle(AIService $ai, AvailabilityService $availability, ConversationService $conversationService)
     {
 
         $message = strtolower(trim($this->message));
@@ -36,8 +38,9 @@ class ProcessIncomingMessage implements ShouldQueue
         if (in_array($message, ['hola', 'hi', 'hello'])) {
             return $this->reply("¡Hola! ¿Qué servicio deseas agendar?");
         }
-
+        $conversation = $conversationService->get($this->phone);
         $data = $ai->parse($this->message);
+        $merged = $conversationService->merge($conversation, $data);
 
         Log::info('AI Parse', [$data]);
 
@@ -51,7 +54,8 @@ class ProcessIncomingMessage implements ShouldQueue
                 return $this->reply($data['reply'] ?? "Hola, ¿en qué puedo ayudarte?");
 
             case 'create_appointment':
-                return $this->handleBooking($data, $availability);
+                return $this->handleBooking($merged, $availability, $conversationService, $conversation);
+
 
             case 'cancel_appointment':
                 return $this->reply($data['reply'] ?? "Claro, ¿qué cita deseas cancelar?");
@@ -62,25 +66,30 @@ class ProcessIncomingMessage implements ShouldQueue
                 return $this->handleServices();
 
             case 'ask_prices':
-                return $this->handlePrices($data);
+                return $this->handlePrices($merged);
 
             case 'ask_employees':
-                return $this->handleEmployees($data);
+                return $this->handleEmployees($merged);
 
             default:
                 return $this->reply($data['reply'] ?? "¿En qué puedo ayudarte?");
         }
     }
 
-    private function handleBooking($data, $availability)
+    private function handleBooking($data, $availability, $conversationService, $conversation)
     {
         // Validate required data
         if (!$data['service']) {
-            return $this->reply("¿Qué servicio deseas?");
+            return $this->reply($data["reply"] ?? "¿Qué servicio deseas?");
         }
-
+        if (!$data['branch']) {
+            return $this->reply($data["reply"] ?? "¿Para qué sucursal deseas?");
+        }
+        if (!$data['name']) {
+            return $this->reply($data["reply"] ?? "¿Me pudieras dar tu nombre?");
+        }
         if (!$data['datetime']) {
-            return $this->reply("¿Para qué día y hora?");
+            return $this->reply($data["reply"] ?? "¿Para qué día y hora?");
         }
 
         // Find service (basic match)
@@ -131,7 +140,7 @@ class ProcessIncomingMessage implements ShouldQueue
         }
 
         // Book appointment
-        $appointment = \App\Models\Appointment::create([
+        $appointment = Appointment::create([
             'client_name' => $data['name'] ?? 'Cliente',
             'client_phone' => $this->phone,
             'branch_id' => $service->branch_id,
@@ -140,6 +149,9 @@ class ProcessIncomingMessage implements ShouldQueue
             'start_time' => $data['datetime'],
             'end_time' => now()->parse($data['datetime'])->addMinutes($service->duration_minutes),
         ]);
+
+        $conversationService->clear($conversation);
+
 
         return $this->reply("¡Listo! 💖 Tu cita está confirmada.");
     }
