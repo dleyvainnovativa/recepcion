@@ -17,7 +17,7 @@ class ConversationService
         );
     }
 
-    public function merge($conversation, $newData)
+    public function merge($conversation, $newData,)
     {
         $current = $conversation->context ?? [];
 
@@ -27,6 +27,7 @@ class ConversationService
             'employee' => $newData['employee'] ?? $current['employee'] ?? null,
             'datetime' => $newData['datetime'] ?? $current['datetime'] ?? null,
             'name'     => $newData['name']     ?? $current['name']     ?? null,
+            'reply' => $newData['reply']
         ];
 
         $conversation->update([

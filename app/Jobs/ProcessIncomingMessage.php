@@ -56,7 +56,6 @@ class ProcessIncomingMessage implements ShouldQueue
             case 'create_appointment':
                 return $this->handleBooking($merged, $availability, $conversationService, $conversation);
 
-
             case 'cancel_appointment':
                 return $this->reply($data['reply'] ?? "Claro, ¿qué cita deseas cancelar?");
 
