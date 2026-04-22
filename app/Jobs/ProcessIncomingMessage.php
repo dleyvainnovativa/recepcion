@@ -52,7 +52,6 @@ class ProcessIncomingMessage implements ShouldQueue
         if (
             !empty($merged['service']) &&
             !empty($merged['datetime']) &&
-            !empty($merged['branch']) &&
             !empty($merged['name'])
         ) {
             return $this->handleBooking($merged, $availability, $conversationService, $conversation);
