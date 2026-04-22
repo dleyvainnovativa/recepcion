@@ -50,6 +50,7 @@ class ProcessIncomingMessage implements ShouldQueue
 
         // If we already have enough data, continue booking regardless of intent
         if (
+            in_array($data['intent'], ['create_appointment']) &&
             !empty($merged['service']) &&
             !empty($merged['datetime']) &&
             !empty($merged['name'])
@@ -64,6 +65,9 @@ class ProcessIncomingMessage implements ShouldQueue
 
             case 'create_appointment':
                 return $this->handleBooking($merged, $availability, $conversationService, $conversation);
+
+            case 'check_availability':
+                return $this->handleAvailability($merged, $availability);
 
             case 'cancel_appointment':
                 return $this->reply($data['reply'] ?? "Claro, ¿qué cita deseas cancelar?");
@@ -82,6 +86,41 @@ class ProcessIncomingMessage implements ShouldQueue
             default:
                 return $this->reply($data['reply'] ?? "¿En qué puedo ayudarte?");
         }
+    }
+
+    private function handleAvailability($data, $availability)
+    {
+        if (!$data['service']) {
+            return $this->reply("¿Para qué servicio deseas consultar disponibilidad?");
+        }
+
+        if (!$data['datetime']) {
+            return $this->reply("¿Para qué día deseas consultar?");
+        }
+
+        $service = Service::where('name', 'like', "%{$data['service']}%")->first();
+
+        if (!$service) {
+            return $this->reply("No encontré ese servicio.");
+        }
+
+        $slots = $availability->getAvailableSlots(
+            $service->branch_id,
+            $service->id,
+            $data['datetime']
+        );
+
+        if (empty($slots)) {
+            return $this->reply("No tengo horarios disponibles ese día.");
+        }
+
+        $text = "Estos son los horarios disponibles:\n";
+
+        foreach (array_slice($slots, 0, 5) as $slot) {
+            $text .= "- $slot\n";
+        }
+
+        return $this->reply($text);
     }
 
     private function handleBooking($data, $availability, $conversationService, $conversation)

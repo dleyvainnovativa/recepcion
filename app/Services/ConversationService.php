@@ -22,11 +22,11 @@ class ConversationService
         $current = $conversation->context ?? [];
 
         $merged = [
-            'service'  => $newData['service']  ?? $current['service']  ?? null,
-            'branch'   => $newData['branch']   ?? $current['branch']   ?? null,
-            'employee' => $newData['employee'] ?? $current['employee'] ?? null,
-            'datetime' => $newData['datetime'] ?? $current['datetime'] ?? null,
-            'name'     => $newData['name']     ?? $current['name']     ?? null,
+            'service'  => $newData['service']  ?: $current['service']  ?? null,
+            'branch'   => $newData['branch']   ?: $current['branch']   ?? null,
+            'employee' => $newData['employee'] ?: $current['employee'] ?? null,
+            'datetime' => $newData['datetime'] ?: $current['datetime'] ?? null,
+            'name'     => $newData['name']     ?: $current['name']     ?? null,
             'reply' => $newData['reply']
         ];
 
