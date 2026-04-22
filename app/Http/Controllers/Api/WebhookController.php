@@ -11,14 +11,8 @@ class WebhookController extends Controller
 {
     public function handle(Request $request)
     {
-        // Log incoming message
-        Log::info('WhatsApp Webhook:', $request->all());
-
-        // Extract message (simplified)
         $message = $request->input('entry.0.changes.0.value.messages.0.text.body');
         $phone = $request->input('entry.0.changes.0.value.messages.0.from');
-
-        Log::info('WhatsApp Webhook Payload:', [$message, $phone]);
 
         if ($message && $phone) {
             ProcessIncomingMessage::dispatch($phone, $message);

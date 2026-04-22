@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use Illuminate\Support\Facades\Log;
 use OpenAI;
 
 class AIService
@@ -90,6 +91,7 @@ RETURN FORMAT (STRICT JSON ONLY):
                 ]
             ],
         ]);
+        Log::info('AI Response', [$response]);
 
         $content = $response->choices[0]->message->content;
 

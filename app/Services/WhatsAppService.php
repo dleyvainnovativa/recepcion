@@ -13,7 +13,6 @@ class WhatsAppService
         $token = config('services.whatsapp.token');
 
         $url = "https://graph.facebook.com/v18.0/{$phoneId}/messages";
-        Log::info('Reply Whatsapp Message', [$message, $to]);
 
         $send =  Http::withToken($token)->post($url, [
             'messaging_product' => 'whatsapp',
@@ -23,7 +22,6 @@ class WhatsAppService
                 'body' => $message
             ]
         ]);
-        Log::info('Reply Whatsapp Response', [$send]);
         return $send;
     }
 }
