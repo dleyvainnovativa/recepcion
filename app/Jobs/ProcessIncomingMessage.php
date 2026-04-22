@@ -48,6 +48,16 @@ class ProcessIncomingMessage implements ShouldQueue
             return $this->reply("No entendí tu mensaje 😅");
         }
 
+        // If we already have enough data, continue booking regardless of intent
+        if (
+            !empty($merged['service']) &&
+            !empty($merged['datetime']) &&
+            !empty($merged['branch']) &&
+            !empty($merged['name'])
+        ) {
+            return $this->handleBooking($merged, $availability, $conversationService, $conversation);
+        }
+
         switch ($data['intent']) {
 
             case 'greeting':
