@@ -21,7 +21,7 @@ class ProcessIncomingMessage implements ShouldQueue
 {
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels;
 
-    public int $tries = 3;
+    // public int $tries = 3;
 
     public function __construct(
         public readonly string $phone,
