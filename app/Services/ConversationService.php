@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Models\Conversation;
-use Illuminate\Support\Facades\Log;
 
 class ConversationService
 {
@@ -24,7 +23,7 @@ class ConversationService
      */
     public function getHistory(Conversation $conversation): array
     {
-        return $conversation->context['history'] ?? [];
+        return $this->context($conversation)['history'] ?? [];
     }
 
     /**
@@ -33,13 +32,12 @@ class ConversationService
      */
     public function appendHistory(Conversation $conversation, string $userMessage, string $assistantReply, int $maxPairs = 10): void
     {
-        $context   = $conversation->context ?? [];
-        $history   = $context['history'] ?? [];
+        $context = $this->context($conversation);
+        $history = $context['history'] ?? [];
 
         $history[] = ['role' => 'user',      'content' => $userMessage];
         $history[] = ['role' => 'assistant', 'content' => $assistantReply];
-        Log::info("Append History", $history);
-        // Keep only the last $maxPairs * 2 messages (user + assistant per pair)
+
         $context['history'] = array_slice($history, - ($maxPairs * 2));
 
         $conversation->context = $context;
@@ -51,11 +49,7 @@ class ConversationService
      */
     public function setContextData(Conversation $conversation, array $data): void
     {
-        $context = $conversation->context ?? [];
-        foreach ($data as $key => $value) {
-            $context[$key] = $value;
-        }
-        $conversation->context = $context;
+        $conversation->context = array_merge($this->context($conversation), $data);
         $conversation->save();
     }
 
@@ -64,7 +58,7 @@ class ConversationService
      */
     public function getContextData(Conversation $conversation, string $key, mixed $default = null): mixed
     {
-        return ($conversation->context ?? [])[$key] ?? $default;
+        return $this->context($conversation)[$key] ?? $default;
     }
 
     /**
@@ -75,5 +69,30 @@ class ConversationService
         $conversation->current_step = null;
         $conversation->context      = ['history' => []];
         $conversation->save();
+    }
+
+    /**
+     * Always return the context as a plain PHP array, regardless of whether
+     * Eloquent's cast has fired or the raw JSON string came back instead.
+     *
+     * This handles two edge cases:
+     *  1. firstOrCreate() can return a partially hydrated model where the cast
+     *     hasn't run yet and context is still the raw JSON string.
+     *  2. Old rows that were stored before the cast was added to the model.
+     */
+    private function context(Conversation $conversation): array
+    {
+        $raw = $conversation->context;
+
+        if (is_array($raw)) {
+            return $raw;
+        }
+
+        if (is_string($raw) && $raw !== '') {
+            $decoded = json_decode($raw, true);
+            return is_array($decoded) ? $decoded : [];
+        }
+
+        return [];
     }
 }
