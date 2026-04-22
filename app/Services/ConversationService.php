@@ -3,7 +3,6 @@
 namespace App\Services;
 
 use App\Models\Conversation;
-use Illuminate\Support\Facades\Log;
 
 class ConversationService
 {
@@ -14,7 +13,7 @@ class ConversationService
     {
         return Conversation::firstOrCreate(
             ['phone' => $phone],
-            ['current_step' => null, 'context' => json_encode(['history' => []])]
+            ['current_step' => null, 'context' => ['history' => []]]
         );
     }
 
@@ -24,9 +23,7 @@ class ConversationService
      */
     public function getHistory(Conversation $conversation): array
     {
-        Log::info('Conversation Context:', [$conversation->context]);
-        $context = json_decode($conversation->context, true);
-        return $context['history'] ?? [];
+        return $conversation->context['history'] ?? [];
     }
 
     /**
@@ -35,17 +32,16 @@ class ConversationService
      */
     public function appendHistory(Conversation $conversation, string $userMessage, string $assistantReply, int $maxPairs = 10): void
     {
-        $context = json_decode($conversation->context, true) ?? [];
-        $history = $context['history'] ?? [];
+        $context   = $conversation->context ?? [];
+        $history   = $context['history'] ?? [];
 
         $history[] = ['role' => 'user',      'content' => $userMessage];
         $history[] = ['role' => 'assistant', 'content' => $assistantReply];
 
         // Keep only the last $maxPairs * 2 messages (user + assistant per pair)
-        $history = array_slice($history, - ($maxPairs * 2));
+        $context['history'] = array_slice($history, - ($maxPairs * 2));
 
-        $context['history'] = $history;
-        $conversation->context = json_encode($context);
+        $conversation->context = $context;
         $conversation->save();
     }
 
@@ -54,11 +50,11 @@ class ConversationService
      */
     public function setContextData(Conversation $conversation, array $data): void
     {
-        $context = json_decode($conversation->context, true) ?? [];
+        $context = $conversation->context ?? [];
         foreach ($data as $key => $value) {
             $context[$key] = $value;
         }
-        $conversation->context = json_encode($context);
+        $conversation->context = $context;
         $conversation->save();
     }
 
@@ -67,8 +63,7 @@ class ConversationService
      */
     public function getContextData(Conversation $conversation, string $key, mixed $default = null): mixed
     {
-        $context = json_decode($conversation->context, true) ?? [];
-        return $context[$key] ?? $default;
+        return ($conversation->context ?? [])[$key] ?? $default;
     }
 
     /**
@@ -77,7 +72,7 @@ class ConversationService
     public function reset(Conversation $conversation): void
     {
         $conversation->current_step = null;
-        $conversation->context = json_encode(['history' => []]);
+        $conversation->context      = ['history' => []];
         $conversation->save();
     }
 }
