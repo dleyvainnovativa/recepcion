@@ -20,11 +20,10 @@ class AIService
     {
         $client = OpenAI::client(config('services.openai.key'));
 
-        $today    = now()->format('Y-m-d');
-        $dayName  = now()->translatedFormat('l'); // e.g. "martes" with Spanish locale
-        $time     = now()->format('H:i');
+        $today   = now()->format('Y-m-d');
+        $dayName = now()->translatedFormat('l');
+        $time    = now()->format('H:i');
 
-        // Build a readable summary of business data to inject into the system prompt
         $businessContext = $this->buildBusinessContext($businessData);
 
         $systemPrompt = <<<PROMPT
@@ -85,20 +84,16 @@ REGLAS DE COMPORTAMIENTO:
 
 ---
 
-FORMATO DE RESPUESTA (JSON estricto, sin markdown, sin texto extra):
+INSTRUCCIÓN CRÍTICA — FORMATO DE RESPUESTA:
+Debes responder ÚNICAMENTE con un objeto JSON válido.
+No escribas ningún texto antes ni después del JSON.
+No uses bloques de código markdown (sin ```, sin ```json).
+El campo "reply" contiene tu respuesta en lenguaje natural para el usuario.
 
-{
-  "intent": "",
-  "service": null,
-  "branch": null,
-  "employee": null,
-  "datetime": null,
-  "client_name": null,
-  "reply": ""
-}
+Estructura exacta requerida:
+{"intent":"","service":null,"branch":null,"employee":null,"datetime":null,"client_name":null,"reply":""}
 PROMPT;
 
-        // Build the messages array: system + full history + current user message
         $messages = [['role' => 'system', 'content' => $systemPrompt]];
 
         foreach ($history as $entry) {
@@ -109,26 +104,33 @@ PROMPT;
 
         try {
             $response = $client->chat()->create([
-                'model'       => 'gpt-4.1-mini',
-                'temperature' => 0.3, // Lower = more predictable JSON output
-                'messages'    => $messages,
+                'model'           => 'gpt-4.1-mini',
+                'temperature'     => 0.2,
+                'response_format' => ['type' => 'json_object'], // Enforce JSON at API level
+                'messages'        => $messages,
             ]);
 
             $content = $response->choices[0]->message->content ?? '';
 
             Log::info('[AIService] Raw response', ['content' => $content]);
 
-            // Strip accidental markdown fences before decoding
-            $clean = preg_replace('/^```json|^```|```$/m', '', trim($content));
+            $decoded = $this->decodeJson($content);
 
-            $decoded = json_decode($clean, true);
-
-            if (json_last_error() !== JSON_ERROR_NONE) {
+            if ($decoded === null) {
                 Log::error('[AIService] JSON decode failed', ['raw' => $content]);
                 return null;
             }
 
-            return $decoded;
+            // Ensure all expected keys exist so callers never get undefined index errors
+            return array_merge([
+                'intent'      => 'unknown',
+                'service'     => null,
+                'branch'      => null,
+                'employee'    => null,
+                'datetime'    => null,
+                'client_name' => null,
+                'reply'       => '',
+            ], $decoded);
         } catch (\Throwable $e) {
             Log::error('[AIService] API call failed', ['error' => $e->getMessage()]);
             return null;
@@ -136,8 +138,44 @@ PROMPT;
     }
 
     /**
+     * Attempt to decode a JSON string using three strategies in order:
+     *  1. Direct decode (happy path — response_format: json_object should guarantee this).
+     *  2. Strip markdown fences and retry.
+     *  3. Extract the first {...} block found anywhere in the string and retry.
+     */
+    private function decodeJson(string $content): ?array
+    {
+        $content = trim($content);
+
+        // Strategy 1: direct decode
+        $decoded = json_decode($content, true);
+        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+            return $decoded;
+        }
+
+        // Strategy 2: strip markdown fences
+        $clean = preg_replace('/^```(?:json)?\s*/m', '', $content);
+        $clean = preg_replace('/\s*```$/m', '', $clean);
+        $clean = trim($clean);
+
+        $decoded = json_decode($clean, true);
+        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+            return $decoded;
+        }
+
+        // Strategy 3: extract the first { ... } block from anywhere in the string
+        if (preg_match('/\{.*\}/s', $content, $matches)) {
+            $decoded = json_decode($matches[0], true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        return null;
+    }
+
+    /**
      * Build a human-readable block of business data to embed in the system prompt.
-     * This keeps the AI grounded in real DB data without it hallucinating services/prices.
      */
     private function buildBusinessContext(array $businessData): string
     {
@@ -146,7 +184,9 @@ PROMPT;
         if (!empty($businessData['branches'])) {
             $lines[] = "SUCURSALES:";
             foreach ($businessData['branches'] as $b) {
-                $lines[] = "  - {$b['name']}" . ($b['address'] ? " | {$b['address']}" : '') . ($b['phone'] ? " | Tel: {$b['phone']}" : '');
+                $lines[] = "  - {$b['name']}"
+                    . ($b['address'] ? " | {$b['address']}" : '')
+                    . ($b['phone']   ? " | Tel: {$b['phone']}" : '');
             }
         }
 
