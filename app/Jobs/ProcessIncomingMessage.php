@@ -304,9 +304,9 @@ class ProcessIncomingMessage implements ShouldQueue
         ]);
 
         // Optionally notify the user
-        app(WhatsAppService::class)->sendMessage(
-            $this->phone,
-            "Tuve un problema al procesar tu solicitud. Por favor intenta de nuevo en un momento."
-        );
+        // app(WhatsAppService::class)->sendMessage(
+        //     $this->phone,
+        //     "Tuve un problema al procesar tu solicitud. Por favor intenta de nuevo en un momento."
+        // );
     }
 }
