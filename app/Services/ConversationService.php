@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Conversation;
+use Illuminate\Support\Facades\Log;
 
 class ConversationService
 {
@@ -37,7 +38,7 @@ class ConversationService
 
         $history[] = ['role' => 'user',      'content' => $userMessage];
         $history[] = ['role' => 'assistant', 'content' => $assistantReply];
-
+        Log::info("Append History", $history);
         // Keep only the last $maxPairs * 2 messages (user + assistant per pair)
         $context['history'] = array_slice($history, - ($maxPairs * 2));
 
