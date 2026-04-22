@@ -74,6 +74,30 @@ IMPORTANT BEHAVIOR:
 
 ---
 
+DATETIME RULES:
+
+- Convert all date/time expressions into ISO 8601 format: YYYY-MM-DD HH:MM
+- Always assume the current year if not specified
+- Interpret:
+  - "mañana" as tomorrows date
+  - "hoy" as todays date
+  - "en la mañana" as 09:00
+  - "en la tarde" as 15:00
+  - "en la noche" as 20:00
+- If only a date is provided, set time to 09:00
+- If only time is provided, assume next available day
+- If the datetime is unclear, return null
+
+- Output example:
+  "datetime": "2026-04-22 15:00"
+
+---
+
+- Always respond in Spanish
+- Never switch to English
+
+---
+
 RETURN FORMAT (STRICT JSON ONLY):
 
 {

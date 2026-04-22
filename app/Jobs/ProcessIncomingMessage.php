@@ -100,6 +100,14 @@ class ProcessIncomingMessage implements ShouldQueue
             return $this->reply("¿Para qué día y hora?");
         }
 
+        $parsedDate = null;
+
+        try {
+            $parsedDate = \Carbon\Carbon::parse($data['datetime']);
+        } catch (\Exception $e) {
+            return $this->reply("No pude entender la fecha y hora, ¿podrías especificarla?");
+        }
+
         // Find service (basic match)
         $service = Service::where('name', 'like', "%{$data['service']}%")->first();
 
