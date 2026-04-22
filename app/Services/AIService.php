@@ -11,6 +11,8 @@ class AIService
     {
         $client = OpenAI::client(config('services.openai.key'));
 
+        Log::info('Client Message', [$message]);
+
         $response = $client->chat()->create([
             'model' => 'gpt-4.1-mini',
             'messages' => [
@@ -91,7 +93,7 @@ RETURN FORMAT (STRICT JSON ONLY):
                 ]
             ],
         ]);
-        Log::info('AI Response', [$response]);
+        Log::info('AI Response', [json_encode($response)]);
 
         $content = $response->choices[0]->message->content;
 
