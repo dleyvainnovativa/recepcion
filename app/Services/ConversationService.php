@@ -34,7 +34,7 @@ class ConversationService
      */
     public function appendHistory(Conversation $conversation, string $userMessage, string $assistantReply, int $maxPairs = 10): void
     {
-        $context = json_decode($conversation->context, true) ?? [];
+        $context = $conversation->context ?? [];
         $history = $context['history'] ?? [];
 
         $history[] = ['role' => 'user',      'content' => $userMessage];
@@ -53,7 +53,7 @@ class ConversationService
      */
     public function setContextData(Conversation $conversation, array $data): void
     {
-        $context = json_decode($conversation->context, true) ?? [];
+        $context = $conversation->context ?? [];
         foreach ($data as $key => $value) {
             $context[$key] = $value;
         }
@@ -66,7 +66,7 @@ class ConversationService
      */
     public function getContextData(Conversation $conversation, string $key, mixed $default = null): mixed
     {
-        $context = json_decode($conversation->context, true) ?? [];
+        $context = $conversation->context ?? [];
         return $context[$key] ?? $default;
     }
 
